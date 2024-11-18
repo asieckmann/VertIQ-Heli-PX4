@@ -157,6 +157,115 @@ int up_dshot_init(uint32_t channel_mask, unsigned dshot_pwm_freq)
 	return channel_mask;
 }
 
+void up_bdshot_erpm(void)
+{
+	uint32_t value;
+	uint32_t data;
+	uint32_t csum_data;
+	uint8_t exponent;
+	uint16_t period;
+	uint16_t erpm;
+
+	bdshot_parsed_recv_mask = 0;
+
+	// Decode each individual channel
+	for (uint8_t channel = 0; (channel < DSHOT_TIMERS); channel++) {
+		if (bdshot_recv_mask & (1 << channel)) {
+			value = ~dshot_inst[channel].raw_response & 0xFFFFF;
+
+			/* if lowest significant isn't 1 we've got a framing error */
+			if (value & 0x1) {
+				/* Decode RLL */
+				value = (value ^ (value >> 1));
+
+				/* Decode GCR */
+				data = gcr_decode[value & 0x1fU];
+				data |= gcr_decode[(value >> 5U) & 0x1fU] << 4U;
+				data |= gcr_decode[(value >> 10U) & 0x1fU] << 8U;
+				data |= gcr_decode[(value >> 15U) & 0x1fU] << 12U;
+
+				/* Calculate checksum */
+				csum_data = data;
+				csum_data = csum_data ^ (csum_data >> 8U);
+				csum_data = csum_data ^ (csum_data >> NIBBLES_SIZE);
+
+				if ((csum_data & 0xFU) != 0xFU) {
+					dshot_inst[channel].crc_error_cnt++;
+
+				} else {
+					data = (data >> 4) & 0xFFF;
+
+					if (data == 0xFFF) {
+						erpm = 0;
+
+					} else {
+						exponent = ((data >> 9U) & 0x7U); /* 3 bit: exponent */
+						period = (data & 0x1ffU); /* 9 bit: period base */
+						period = period << exponent; /* Period in usec */
+						erpm = ((1000000U * 60U / 100U + period / 2U) / period);
+					}
+
+					dshot_inst[channel].erpm = erpm;
+					bdshot_parsed_recv_mask |= (1 << channel);
+					dshot_inst[channel].last_no_response_cnt = dshot_inst[channel].no_response_cnt;
+				}
+
+			} else {
+				dshot_inst[channel].frame_error_cnt++;
+			}
+		}
+	}
+}
+
+
+int up_bdshot_num_erpm_ready(void)
+{
+	int num_ready = 0;
+
+	for (unsigned i = 0; i < DSHOT_TIMERS; ++i) {
+		if (bdshot_parsed_recv_mask & (1 << i)) {
+			++num_ready;
+		}
+	}
+
+	return num_ready;
+}
+
+
+int up_bdshot_get_erpm(uint8_t channel, int *erpm)
+{
+	if (bdshot_parsed_recv_mask & (1 << channel)) {
+		*erpm = (int)dshot_inst[channel].erpm;
+		return 0;
+	}
+
+	return -1;
+}
+
+int up_bdshot_channel_status(uint8_t channel)
+{
+	if (channel < DSHOT_TIMERS) {
+		return ((dshot_inst[channel].no_response_cnt - dshot_inst[channel].last_no_response_cnt) < BDSHOT_OFFLINE_COUNT);
+	}
+
+	return -1;
+}
+
+void up_bdshot_status(void)
+{
+
+	for (uint8_t channel = 0; (channel < DSHOT_TIMERS); channel++) {
+
+		if (dshot_inst[channel].init) {
+			PX4_INFO("Channel %i %s Last erpm %i value", channel, up_bdshot_channel_status(channel) ? "online" : "offline",
+				 dshot_inst[channel].erpm);
+			PX4_INFO("CRC errors Frame error No response");
+			PX4_INFO("%10lu %11lu %11lu", dshot_inst[channel].crc_error_cnt, dshot_inst[channel].frame_error_cnt,
+				 dshot_inst[channel].no_response_cnt);
+		}
+	}
+}
+
 void up_dshot_trigger(void)
 {
 	uint32_t buf_adr;

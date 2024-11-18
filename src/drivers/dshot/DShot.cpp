@@ -251,6 +251,83 @@ void DShot::handle_new_telemetry_data(const int telemetry_index, const DShotTele
 	}
 
 	_telemetry->last_telemetry_index = telemetry_index;
+
+	return ret;
+}
+
+void DShot::publish_esc_status(void)
+{
+	esc_status_s &esc_status = _telemetry->esc_status_pub.get();
+	int telemetry_index = 0;
+
+	// clear data of the esc that are offline
+	for (int index = 0; (index < _telemetry->last_telemetry_index); index++) {
+		if ((esc_status.esc_online_flags & (1 << index)) == 0) {
+			memset(&esc_status.esc[index], 0, sizeof(struct esc_report_s));
+		}
+	}
+
+	// FIXME: mark all UART Telemetry ESC's as online, otherwise commander complains even for a single dropout
+	esc_status.esc_count = _telemetry->handler.numMotors();
+	esc_status.esc_online_flags = (1 << esc_status.esc_count) - 1;
+	esc_status.esc_armed_flags = (1 << esc_status.esc_count) - 1;
+
+	if (_bidirectional_dshot_enabled) {
+		for (unsigned i = 0; i < _num_outputs; i++) {
+			if (_mixing_output.isFunctionSet(i)) {
+				if (up_bdshot_channel_status(i)) {
+					esc_status.esc_online_flags |= 1 << i;
+
+				} else {
+					esc_status.esc_online_flags &= ~(1 << i);
+				}
+
+				++telemetry_index;
+			}
+		}
+	}
+
+	// ESC telem wrap around or bdshot update
+	_telemetry->esc_status_pub.update();
+
+	// reset esc online flags
+	esc_status.esc_online_flags = 0;
+}
+
+int DShot::handle_new_bdshot_erpm(void)
+{
+	int num_erpms = 0;
+	int telemetry_index = 0;
+	int erpm;
+	esc_status_s &esc_status = _telemetry->esc_status_pub.get();
+
+	esc_status.timestamp = hrt_absolute_time();
+	esc_status.counter = _esc_status_counter++;
+	esc_status.esc_connectiontype = esc_status_s::ESC_CONNECTION_TYPE_DSHOT;
+	esc_status.esc_armed_flags = _outputs_on;
+
+	// We wait until all are ready.
+	if (up_bdshot_num_erpm_ready() < (int)popcount(_output_mask)) {
+		return 0;
+	}
+
+	for (unsigned i = 0; i < _num_outputs; i++) {
+		if (_mixing_output.isFunctionSet(i)) {
+			if (up_bdshot_get_erpm(i, &erpm) == 0) {
+				num_erpms++;
+				esc_status.esc_online_flags |= 1 << telemetry_index;
+				esc_status.esc[telemetry_index].timestamp = hrt_absolute_time();
+				esc_status.esc[telemetry_index].esc_rpm = (erpm * 100) / (_param_mot_pole_count.get() / 2);
+				esc_status.esc[telemetry_index].actuator_function = _telemetry->actuator_functions[telemetry_index];
+			}
+
+			++telemetry_index;
+		}
+
+
+	}
+
+	return num_erpms;
 }
 
 int DShot::send_command_thread_safe(const dshot_command_t command, const int num_repetitions, const int motor_index)
