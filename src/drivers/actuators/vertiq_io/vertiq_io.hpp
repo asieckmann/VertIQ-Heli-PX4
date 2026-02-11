@@ -62,6 +62,7 @@
 #ifdef CONFIG_USE_PULSING_CONFIGURATION
 #include "iq-module-communication-cpp/inc/voltage_superposition_client.hpp"
 #include "iq-module-communication-cpp/inc/pulsing_rectangular_input_parser_client.hpp"
+#include <uORB/topics/motor_dynamics.h> //CUSTOM CODE
 #endif //CONFIG_USE_PULSING_CONFIGURATION
 
 enum DISARM_BEHAVIORS {USER_MIXER_VALUE, TRIGGER_MOTOR_DISARM, COAST_MOTOR, SEND_PREDEFINED_VELOCITY};
@@ -151,6 +152,12 @@ private:
 	ArmingHandlerClient _broadcast_arming_handler;
 	IQUartFlightControllerInterfaceClient _operational_ifci;
 	IFCIPackedMessage _transmission_message;
+
+	//CUSTOM CODE
+	motor_dynamics_s dat{};
+	orb_advert_t dat_pub{nullptr};
+	BrushlessDriveClient _brushless_drive_client;
+
 	static const uint16_t MAX_IFCI_MESSAGE = 40; //Up to 16 2 byte commands, one telemetry byte, plus 7 IQUART added bytes
 	uint8_t _output_message[MAX_IFCI_MESSAGE];
 	uint8_t _output_len;

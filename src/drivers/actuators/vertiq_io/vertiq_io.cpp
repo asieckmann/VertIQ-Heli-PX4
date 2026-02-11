@@ -34,6 +34,9 @@
 
 #include <px4_platform_common/log.h>
 
+//Custom
+#include <uORB/topics/motor_dynamics.h>
+
 px4::atomic_bool VertiqIo::_request_telemetry_init{false};
 char VertiqIo::_telemetry_device[] {};
 
@@ -45,7 +48,8 @@ VertiqIo::VertiqIo() :
 	_configuration_handler(&_serial_interface, &_client_manager),
 	_broadcast_prop_motor_control(_kBroadcastID),
 	_broadcast_arming_handler(_kBroadcastID),
-	_operational_ifci(_kBroadcastID)
+	_operational_ifci(_kBroadcastID),
+	_brushless_drive_client(0)//CUSTOM CODE
 {
 	//Make sure we get the correct initial values for our parameters
 	updateParams();
@@ -56,6 +60,9 @@ VertiqIo::VertiqIo() :
 	_client_manager.AddNewClient(&_operational_ifci);
 	_client_manager.AddNewClient(&_broadcast_arming_handler);
 	_client_manager.AddNewClient(&_broadcast_prop_motor_control);
+
+	//CUSTOM CODE
+	_client_manager.AddNewClient(&_brushless_drive_client);
 }
 
 VertiqIo::~VertiqIo()
@@ -68,6 +75,10 @@ VertiqIo::~VertiqIo()
 //called by our task_spawn function
 bool VertiqIo::init()
 {
+
+//CUSTOM CODE
+dat_pub = orb_advertise(ORB_ID(motor_dynamics), &dat);
+
 #ifdef CONFIG_USE_IFCI_CONFIGURATION
 	//Grab the number of IFCI control values the user wants to use
 	_cvs_in_use = (uint8_t)_param_vertiq_number_of_cvs.get();
@@ -111,8 +122,19 @@ void VertiqIo::Run()
 		_request_telemetry_init.store(false);
 	}
 
+	//CUSTOM CODE
+	dat.timestamp = hrt_absolute_time();
+	auto& ifci = *_serial_interface.GetIquartInterface();
+	_brushless_drive_client.obs_angle_.get(ifci);
+	_brushless_drive_client.obs_velocity_.get(ifci);
+
 	//Handle IQUART reception and transmission
 	_client_manager.HandleClientCommunication();
+
+	//CUSTOM CODE
+	dat.angle = _brushless_drive_client.obs_angle_.get_reply();
+	dat.velocity = _brushless_drive_client.obs_velocity_.get_reply();
+	orb_publish(ORB_ID(motor_dynamics), dat_pub, &dat);
 
 	// If we're supposed to ask for telemetry from someone
 	if (_telem_bitmask) {
