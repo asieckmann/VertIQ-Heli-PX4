@@ -31,6 +31,8 @@
  *
  ****************************************************************************/
 #include "vertiq_io.hpp"
+//Custom
+#include <uORB/topics/motor_dynamics.h>
 
 #include <px4_platform_common/log.h>
 
@@ -44,7 +46,8 @@ VertiqIo::VertiqIo(const char *port) :
 	_configuration_handler(&_serial_interface, &_client_manager),
 	_broadcast_prop_motor_control(_kBroadcastID),
 	_broadcast_arming_handler(_kBroadcastID),
-	_operational_ifci(_kBroadcastID)
+	_operational_ifci(_kBroadcastID),
+	_brushless_drive_client(0)//CUSTOM CODE
 {
 	// store port name
 	strncpy(_port, port, sizeof(_port) - 1);
@@ -61,6 +64,8 @@ VertiqIo::VertiqIo(const char *port) :
 	_client_manager.AddNewClient(&_operational_ifci);
 	_client_manager.AddNewClient(&_broadcast_arming_handler);
 	_client_manager.AddNewClient(&_broadcast_prop_motor_control);
+	//CUSTOM CODE
+	_client_manager.AddNewClient(&_brushless_drive_client);
 }
 
 VertiqIo::~VertiqIo()
@@ -77,7 +82,8 @@ VertiqIo::~VertiqIo()
 bool VertiqIo::init()
 {
 	_serial_interface.InitSerial(_port, _param_vertiq_baud.get());
-
+//CUSTOM CODE
+dat_pub = orb_advertise(ORB_ID(motor_dynamics), &dat);
 #ifdef CONFIG_USE_IFCI_CONFIGURATION
 	//Grab the number of IFCI control values the user wants to use
 	_cvs_in_use = (uint8_t)_param_vertiq_number_of_cvs.get();
@@ -92,7 +98,7 @@ bool VertiqIo::init()
 
 	//Initialize our telemetry handler
 	_telem_manager.Init(_telem_bitmask, (uint8_t)_param_vertiq_target_module_id.get());
-	_telem_manager.StartPublishing(&_esc_status_pub);
+	//_telem_manager.StartPublishing(&_esc_status_pub); REMOVED: Overwriting bdshot
 
 	//Make sure we get our thread into execution
 	ScheduleNow();
@@ -119,8 +125,19 @@ void VertiqIo::Run()
 	perf_begin(_loop_perf);
 	perf_count(_loop_interval_perf);
 
+	//CUSTOM CODE
+	dat.timestamp = hrt_absolute_time();
+	auto& ifci = *_serial_interface.GetIquartInterface();
+	_brushless_drive_client.obs_angle_.get(ifci);
+	_brushless_drive_client.obs_velocity_.get(ifci);
+	orb_publish(ORB_ID(motor_dynamics), dat_pub, &dat);
 	//Handle IQUART reception and transmission
 	_client_manager.HandleClientCommunication();
+
+	//CUSTOM CODE
+	dat.angle = _brushless_drive_client.obs_angle_.get_reply();
+	dat.velocity = _brushless_drive_client.obs_velocity_.get_reply();
+	orb_publish(ORB_ID(motor_dynamics), dat_pub, &dat);
 
 	// If we're supposed to ask for telemetry from someone
 	if (_telem_bitmask) {
@@ -245,7 +262,7 @@ bool VertiqIo::updateOutputs(uint16_t outputs[MAX_ACTUATORS], unsigned num_outpu
 	}
 
 	//Publish our esc status to uORB
-	_esc_status_pub.publish(_telem_manager.GetEscStatus());
+	//_esc_status_pub.publish(_telem_manager.GetEscStatus()); REMOVED: Overwriting bdshot
 #endif
 	return true;
 }

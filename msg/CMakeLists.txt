@@ -136,6 +136,7 @@ set(msg_files
 	ManualControlSwitches.msg
 	MavlinkLog.msg
 	MavlinkTunnel.msg
+	MotorDynamics.msg
 	MessageFormatRequest.msg
 	MessageFormatResponse.msg
 	Mission.msg
